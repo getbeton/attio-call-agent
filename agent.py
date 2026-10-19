@@ -261,7 +261,7 @@ def route(people: list[dict], rules: Rules) -> tuple[str, list[str], list[str]]:
 
 def recent_recordings(days: int, rules: Rules):
     now = datetime.now(timezone.utc)
-    params = {"limit": 200, "sort": "start_desc", "starts_from": iso(now - timedelta(days=days)), "starts_before": iso(now)}
+    params = {"limit": 200, "sort": "start_desc", "ends_from": iso(now - timedelta(days=days)), "starts_before": iso(now)}
     while True:
         page = attio("GET", "/meetings", **params)
         for meeting in page["data"]:
