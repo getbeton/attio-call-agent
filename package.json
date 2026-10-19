@@ -1,0 +1,17 @@
+{
+  "name": "attio-call-agent",
+  "version": "2.0.0",
+  "description": "Attio call recording -> CRM update, next steps and recap email, plus a CRM chat. A Pi agent on grok in Telegram; you approve every write.",
+  "license": "MIT",
+  "type": "module",
+  "private": true,
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "start": "node src/main.ts serve",
+    "test": "node --test tests/*.test.ts"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "1.3.0",
+    "typebox": "1.3.27"
+  }
+}

@@ -1,6 +1,8 @@
-FROM python:3.14-slim
+FROM node:24-slim
 WORKDIR /app
-COPY agent.py ./
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --no-audit --no-fund
+COPY src ./src
 COPY prompts ./prompts
-ENV PYTHONUNBUFFERED=1 DATA_DIR=/data
-CMD ["python", "agent.py", "serve"]
+ENV NODE_ENV=production DATA_DIR=/data NODE_NO_WARNINGS=1
+CMD ["node", "src/main.ts", "serve"]
