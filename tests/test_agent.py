@@ -155,6 +155,85 @@ class Security(unittest.TestCase):
                          "https://api.telegram.org/bot***/sendMessage")
 
 
+class TwoDecisions(unittest.TestCase):
+    """The CRM part and the email part are approved or skipped separately."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.store = agent.Store(Path(self.tmp.name) / "t.db")
+        self.sent = []
+        self.saved = {name: getattr(agent, name) for name in ("tg_send", "clear_buttons", "apply_crm", "send_email")}
+        agent.tg_send = lambda text, markup=None: self.sent.append((text, markup)) or len(self.sent)
+        agent.clear_buttons = lambda message_id: None
+        plan = agent.make_plan(draft(), CTX, [])
+        self.store.insert("r1", "m1", "drafted", version=1, context=CTX, plan=plan, rounds=[{"draft": draft()}])
+
+    def tearDown(self):
+        for name, fn in self.saved.items():
+            setattr(agent, name, fn)
+        self.tmp.cleanup()
+
+    def press(self, data):
+        agent.handle_button(self.store, RULES, {"data": data, "message": {"message_id": 1}})
+
+    def fake_step(self, key, value):
+        def step(store, *args):
+            rid = args[-1]
+            result = store.get(rid)["result"] or {}
+            result[key] = value
+            store.update(rid, result=result)
+            return result
+        return step
+
+    def test_buttons_per_part(self):
+        crm = agent.buttons("r1", 3, "crm")["inline_keyboard"][0]
+        mail = agent.buttons("r1", 3, "email")["inline_keyboard"][0]
+        self.assertEqual([b["callback_data"] for b in crm], ["ca:r1:3", "cx:r1:3"])
+        self.assertEqual([b["callback_data"] for b in mail], ["es:r1:3", "ex:r1:3"])
+        self.assertEqual(len(agent.buttons("r1", 3, "email", can_send=False)["inline_keyboard"][0]), 1)
+
+    def test_card_status(self):
+        self.assertEqual(agent.card_status({}), "drafted")
+        self.assertEqual(agent.card_status({"crm": "applied"}), "drafted")
+        self.assertEqual(agent.card_status({"crm": "applied", "email": "sending"}), "drafted")
+        self.assertEqual(agent.card_status({"crm": "applied", "email": "msg1"}), "done")
+        self.assertEqual(agent.card_status({"crm": "skipped", "email": "skipped"}), "skipped")
+
+    def test_apply_crm_then_send(self):
+        agent.apply_crm = self.fake_step("crm", "applied")
+        agent.send_email = self.fake_step("email", "gmail-id")
+        self.press("ca:r1:1")
+        self.assertEqual(self.store.get("r1")["status"], "drafted")
+        self.press("ca:r1:1")
+        self.assertIn("already done", self.sent[-1][0])
+        self.press("es:r1:1")
+        self.assertEqual(self.store.get("r1")["status"], "done")
+        self.assertIn("sent to bob@client.com", self.sent[-1][0])
+
+    def test_skip_both(self):
+        self.press("cx:r1:1")
+        self.press("ex:r1:1")
+        self.assertEqual(self.store.get("r1")["status"], "skipped")
+
+    def test_old_and_unknown_buttons(self):
+        self.press("ca:r1:0")
+        self.press("s:r1:1")  # a button from before the split
+        self.assertTrue(all("old" in text for text, _ in self.sent))
+        self.assertEqual(self.store.get("r1")["status"], "drafted")
+
+    def test_send_card_posts_only_open_parts(self):
+        agent.send_card(self.store, "r1")
+        markups = [m for _, m in self.sent if m]
+        self.assertEqual([m["inline_keyboard"][0][0]["callback_data"][:2] for m in markups], ["ca", "es"])
+        self.assertIn("Reply with text or voice", self.sent[-1][0])
+        self.sent.clear()
+        self.store.update("r1", result={"crm": "applied"})
+        agent.send_card(self.store, "r1")
+        self.assertTrue(all("CRM" not in text for text, _ in self.sent))
+        self.assertEqual(self.sent[-1][1]["inline_keyboard"][0][0]["callback_data"], "es:r1:1")
+        self.assertEqual(self.store.get("r1")["crm_message_id"], None)
+
+
 class StoreTest(unittest.TestCase):
     def test_roundtrip(self):
         with tempfile.TemporaryDirectory() as d:

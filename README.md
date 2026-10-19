@@ -22,16 +22,19 @@ Each job takes a few minutes, so the jobs slip. Then the deal shows a stale stag
 
 ## What it does
 
-- **Starts by itself.** An Attio `call-recording.created` webhook starts each run. A timer re-checks recent recordings in case a webhook was lost.
-- **Reads the full context.** It reads the transcript, the company, its deals, the people, the last notes, and your Attio schema: fields, select options and deal stages.
-- **Makes a draft with Grok:**
+- An Attio `call-recording.created` webhook starts each run. A timer re-checks recent recordings in case a webhook was lost.
+- The agent reads the transcript, the company, its deals, the people, the last notes, and your Attio schema: fields, select options and deal stages.
+- Grok makes a draft:
   - field changes, each with a quote from the call as evidence
   - a new deal when the call shows an opportunity and the company has no deal
   - next steps as Attio tasks with due dates
   - an internal minutes note
   - a recap email in the language of the call (English or Russian)
-- **Sends you one Telegram card.** Reply with text or a **voice note** to change the draft. The agent makes a new version.
-- **Applies on your tap.** ✅ **Send + apply** updates Attio, writes the note and tasks, and sends the email from Gmail. 🗂 **CRM only** skips the email. ⏭ **Skip** closes the card.
+- You get one Telegram card in two parts: the CRM part and the email part. Reply to a part with text or a voice note to change the draft. The agent makes a new version.
+- Each part has its own buttons, so you make two decisions:
+  - CRM part: ✅ Apply to Attio writes the deal, the fields, the note and the tasks. ⏭ Skip CRM writes nothing.
+  - Email part: ✉️ Send sends the recap from Gmail. ⏭ Skip email sends nothing.
+- The card closes when both parts are decided. If you apply one part and then reply, the new version shows only the part that is still open.
 
 ```text
 📞 Acme <> Northwind · 2026-10-12 · v2
@@ -49,7 +52,10 @@ Next steps → Attio tasks
 • 2026-10-20 · Alex: send the sample for three agencies
 • 2026-10-23 · Dana: confirm the pilot scope with finance
 
-✉️ Email from alex@acme.com
+[✅ Apply to Attio]  [⏭ Skip CRM]
+
+✉️ Email · Acme <> Northwind · v2
+From: alex@acme.com
 To: dana@northwind.com
 Subject: Notes from our call
 
@@ -57,8 +63,13 @@ Hi Dana,
 
 Notes from our call today.
 ...
+Next steps:
+- I will send the sample for three agencies by 20 October.
+- Dana will confirm the pilot scope with finance by 23 October.
 
-[✅ Send + apply]  [🗂 CRM only]  [⏭ Skip]
+Alex
+
+[✉️ Send]  [⏭ Skip email]
 ```
 
 ## How it works
@@ -80,10 +91,12 @@ sequenceDiagram
     S->>G: feedback (voice → xAI speech to text first)
     G-->>S: draft v2
     S->>T: card v2
-    T->>S: ✅ Send + apply
+    T->>S: ✅ Apply to Attio
     S->>A: deal, fields, notes, tasks
+    S->>T: Attio updated, with links
+    T->>S: ✉️ Send
     S->>M: recap email
-    S->>T: done, with links
+    S->>T: sent
 ```
 
 The agent is a single Python file that uses only the standard library. It runs as one process with three parts:
@@ -100,14 +113,14 @@ State is one SQLite file on a volume.
 
 The model writes drafts. Code decides what is written and sent.
 
-- **No write and no send without your tap.** The model cannot call Attio or Gmail.
-- **Model output is validated** against your live Attio schema. The agent drops unknown fields, unknown select options, unknown deal IDs and bad numbers or dates, and shows a warning on the card.
-- **Recipients are limited** to the meeting participants and the addresses that you type in feedback. The transcript cannot add a recipient.
-- **The transcript is data.** The prompt tells the model to ignore instructions inside it.
-- **Signed webhooks.** The agent checks the Attio HMAC signature and the Telegram secret token. It accepts Telegram messages from your user ID only.
-- **No double sends.** Each button is tied to one card version. The agent saves the email state before it calls Gmail. After a crash, it does not send again. It tells you to check the Sent folder.
-- **Safe retries.** The agent saves each finished step. A second tap does only the steps that remain.
-- **Small Gmail scope.** The token has `gmail.send` only. It cannot read your mailbox.
+- Nothing is written to Attio and nothing is sent without your tap. The model cannot call Attio or Gmail.
+- The agent validates the model output against your live Attio schema. It drops unknown fields, unknown select options, unknown deal IDs and bad numbers or dates, and shows a warning on the card.
+- Recipients are limited to the meeting participants and the addresses that you type in feedback. The transcript cannot add a recipient.
+- The transcript is data. The prompt tells the model to ignore instructions inside it.
+- The agent checks the Attio HMAC signature and the Telegram secret token. It accepts Telegram messages from your user ID only.
+- Each button is tied to one card version and one part. The agent saves the email state before it calls Gmail. After a crash, it does not send again; it tells you to check the Sent folder.
+- The agent saves each finished Attio step. A second tap does only the steps that remain.
+- The Gmail token has the `gmail.send` scope only. It cannot read your mailbox.
 
 ## Who gets the email
 
@@ -123,31 +136,54 @@ The model writes drafts. Code decides what is written and sent.
 
 You need an Attio workspace with call recording, a Telegram account, an xAI API key and a Google Workspace or Gmail account.
 
-1. **Telegram.** Create a bot with [@BotFather](https://t.me/BotFather). Get your numeric user ID, for example from [@userinfobot](https://t.me/userinfobot).
-2. **Attio.** Go to Workspace settings → Developers and create an access token with these scopes: `record_permission:read-write`, `object_configuration:read`, `meeting:read`, `call_recording:read`, `note:read-write`, `task:read-write`, `user_management:read`, `webhook:read-write`.
-3. **Gmail.** In Google Cloud, create an OAuth client of type *Desktop app*. Then, on your laptop, run:
-   ```bash
-   GOOGLE_CLIENT_ID=... GOOGLE_CLIENT_SECRET=... python agent.py gmail-auth
-   ```
-   Open the URL, allow access, and copy `refresh_token`. To send from an alias, add it in Gmail → Settings → Accounts → *Send mail as*.
-   If the OAuth consent screen is in *Testing* mode, Google expires the token after 7 days. Use an *Internal* app or publish the app.
-4. **Deploy on Railway.**
-   1. Fork this repo.
-   2. Create a Railway project from the fork. Railway finds the `Dockerfile`.
-   3. Add a volume at `/data`.
-   4. Set the env vars from [`.env.example`](.env.example).
-   5. Generate a public domain.
-   6. Optional: in the service settings, set the healthcheck path to `/health`. Keep one replica.
-5. **Connect the webhooks.** Run this with the same env vars:
-   ```bash
-   python agent.py setup https://your-service.up.railway.app
-   ```
-   This command sets the Telegram webhook and the bot profile, then creates the Attio webhook. It prints `attio_webhook_secret` one time. Put the secret into `ATTIO_WEBHOOK_SECRET` on Railway.
-6. **Test without writes.** Choose a recorded meeting and run:
-   ```bash
-   python agent.py preview <meeting_id> <recording_id>
-   ```
-   The command prints the card and the validated plan. It does not write to Attio and does not send anything.
+### 1. Telegram
+
+Create a bot with [@BotFather](https://t.me/BotFather). Get your numeric user ID, for example from [@userinfobot](https://t.me/userinfobot).
+
+### 2. Attio
+
+Go to Workspace settings → Developers and create an access token with these scopes: `record_permission:read-write`, `object_configuration:read`, `meeting:read`, `call_recording:read`, `note:read-write`, `task:read-write`, `user_management:read`, `webhook:read-write`.
+
+### 3. Gmail
+
+In Google Cloud, create an OAuth client of type *Desktop app*. Then, on your laptop, run:
+
+```bash
+GOOGLE_CLIENT_ID=... GOOGLE_CLIENT_SECRET=... python agent.py gmail-auth
+```
+
+Open the URL, allow access, and copy `refresh_token`. To send from an alias, add it in Gmail → Settings → Accounts → *Send mail as*.
+
+If the OAuth consent screen is in *Testing* mode, Google expires the token after 7 days. Use an *Internal* app or publish the app.
+
+### 4. Railway
+
+1. Fork this repo.
+2. Create a Railway project from the fork. Railway finds the `Dockerfile`.
+3. Add a volume at `/data`.
+4. Set the env vars from [`.env.example`](.env.example).
+5. Generate a public domain.
+6. Optional: in the service settings, set the healthcheck path to `/health`. Keep one replica.
+
+### 5. Webhooks
+
+Run this with the same env vars:
+
+```bash
+python agent.py setup https://your-service.up.railway.app
+```
+
+This command sets the Telegram webhook and the bot profile, then creates the Attio webhook. It prints `attio_webhook_secret` one time. Put the secret into `ATTIO_WEBHOOK_SECRET` on Railway.
+
+### 6. A test without writes
+
+Choose a recorded meeting and run:
+
+```bash
+python agent.py preview <meeting_id> <recording_id>
+```
+
+The command prints the card and the validated plan. It does not write to Attio and does not send anything.
 
 ## Configuration
 
@@ -189,7 +225,7 @@ The first draft runs in the background after Attio finishes the transcript. You 
 ## Telegram commands
 
 - Reply to a card with text or voice to change that card. A message that is not a reply goes to the newest open card.
-- `/pending` lists the open cards.
+- `/pending` sends the open cards again, with fresh buttons.
 - `/help` shows the usage.
 
 ## Limits

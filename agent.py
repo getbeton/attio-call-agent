@@ -606,12 +606,12 @@ def render_card(ctx: dict, plan: dict, version: int) -> tuple[list[str], list[st
         blocks.append("\n".join(f"⚠️ {e(w)}" for w in plan["warnings"]))
 
     em = plan["email"]
-    mail_head = [f"✉️ <b>Email</b> from {e(em['sender'])}", f"To: {e(', '.join(em['to']) or '—')}"]
+    mail_head = [f"✉️ <b>Email</b> · {e(m['title'])} · v{version}", f"From: {e(em['sender'])}",
+                 f"To: {e(', '.join(em['to']) or '—')}"]
     if em["cc"]:
         mail_head.append(f"CC: {e(', '.join(em['cc']))}")
     mail_head.append(f"Subject: <b>{e(em['subject'])}</b>")
-    mail = ["\n".join(mail_head), e(em["body"]), "<i>Reply with text or voice to change the draft.</i>"]
-    return blocks, mail
+    return blocks, ["\n".join(mail_head), e(em["body"])]
 
 
 def pack(blocks: list[str], limit: int = TG_LIMIT) -> list[str]:
@@ -675,11 +675,34 @@ def tg_download(file_id: str) -> bytes:
     return http("GET", f"https://api.telegram.org/file/bot{env('TELEGRAM_BOT_TOKEN')}/{path}", raw=True)
 
 
-def buttons(rid: str, version: int, can_send: bool) -> dict:
-    row = [{"text": "✅ Send + apply", "callback_data": f"s:{rid}:{version}"}] if can_send else []
-    row += [{"text": "🗂 CRM only", "callback_data": f"a:{rid}:{version}"},
-            {"text": "⏭ Skip", "callback_data": f"k:{rid}:{version}"}]
+ACTIONS = {"ca": "crm", "cx": "crm", "es": "email", "ex": "email"}  # apply / skip CRM, send / skip email
+
+
+def buttons(rid: str, version: int, part: str, can_send: bool = True) -> dict:
+    """One keyboard for each part of the card: the CRM part and the email part are separate decisions."""
+    if part == "crm":
+        row = [{"text": "✅ Apply to Attio", "callback_data": f"ca:{rid}:{version}"},
+               {"text": "⏭ Skip CRM", "callback_data": f"cx:{rid}:{version}"}]
+    else:
+        row = [{"text": "✉️ Send", "callback_data": f"es:{rid}:{version}"}] if can_send else []
+        row.append({"text": "⏭ Skip email", "callback_data": f"ex:{rid}:{version}"})
     return {"inline_keyboard": [row]}
+
+
+def crm_open(result: dict | None) -> bool:
+    return (result or {}).get("crm") not in ("applied", "skipped")
+
+
+def email_open(result: dict | None) -> bool:
+    state = (result or {}).get("email")
+    return not state or state == "sending"
+
+
+def card_status(result: dict | None) -> str:
+    """A card stays open until both parts are decided."""
+    if crm_open(result) or email_open(result):
+        return "drafted"
+    return "skipped" if (result["crm"], result["email"]) == ("skipped", "skipped") else "done"
 
 
 def clear_buttons(message_id: int | None) -> None:
@@ -734,11 +757,15 @@ class Store:
         self.db.executescript("""
             create table if not exists calls (
               recording_id text primary key, meeting_id text not null, status text not null,
-              version integer not null default 0, card_message_id integer,
+              version integer not null default 0, card_message_id integer, crm_message_id integer,
               context text, transcript text, rounds text, plan text, result text, error text,
               created_at text not null, updated_at text not null);
             create table if not exists messages (message_id integer primary key, recording_id text not null);
         """)
+        try:  # databases made before the CRM part had its own buttons
+            self.db.execute("alter table calls add column crm_message_id integer")
+        except sqlite3.OperationalError:
+            pass  # the column exists
 
     def get(self, rid: str) -> dict | None:
         row = self.db.execute("select * from calls where recording_id = ?", (rid,)).fetchone()
@@ -782,15 +809,27 @@ class Store:
 # ---------- the flow ----------
 
 def send_card(store: Store, rid: str) -> None:
+    """Post the parts that still wait for a decision. The last message of each part carries its buttons."""
     row = store.get(rid)
+    result = row["result"] or {}
     crm, mail = render_card(row["context"], row["plan"], row["version"])
-    ids = [tg_send(text) for text in pack(crm)]
-    mail_msgs = pack(mail)
-    markup = buttons(rid, row["version"], bool(row["plan"]["email"]["to"]))
-    for i, text in enumerate(mail_msgs):
-        ids.append(tg_send(text, markup if i == len(mail_msgs) - 1 else None))
+    parts = [(name, blocks) for name, blocks, is_open in (("crm", crm, crm_open(result)), ("email", mail, email_open(result)))
+             if is_open]
+    parts[-1][1].append("<i>Reply with text or voice to change the draft.</i>")
+    ids, last = [], {}
+    for name, blocks in parts:
+        markup = buttons(rid, row["version"], name, bool(row["plan"]["email"]["to"]))
+        msgs = pack(blocks)
+        for i, text in enumerate(msgs):
+            ids.append(tg_send(text, markup if i == len(msgs) - 1 else None))
+        last[name] = ids[-1]
     store.add_messages(rid, ids)
-    store.update(rid, card_message_id=ids[-1])
+    store.update(rid, crm_message_id=last.get("crm"), card_message_id=last.get("email"))
+
+
+def clear_card_buttons(row: dict) -> None:
+    clear_buttons(row.get("crm_message_id"))
+    clear_buttons(row.get("card_message_id"))
 
 
 def process_recording(store: Store, rules: Rules, mid: str, rid: str) -> None:
@@ -825,13 +864,13 @@ def redraft(store: Store, rid: str, feedback: str) -> None:
     draft = grok(llm_messages(row["context"], row["transcript"], rounds), os.environ.get("XAI_REDRAFT_EFFORT", "low"))
     plan = make_plan(draft, row["context"], [r["feedback"] for r in rounds if r.get("feedback")])
     rounds.append({"draft": draft})
-    clear_buttons(row["card_message_id"])
+    clear_card_buttons(row)
     store.update(rid, rounds=rounds, plan=plan, version=row["version"] + 1)
     send_card(store, rid)
 
 
-def apply(store: Store, rules: Rules, rid: str, send_email: bool) -> dict:
-    """Write Attio, then send the email. Each finished step is saved, so a retry does only the rest."""
+def apply_crm(store: Store, rules: Rules, rid: str) -> dict:
+    """Write the CRM part to Attio. Each finished step is saved, so a retry does only the rest."""
     row = store.get(rid)
     ctx, plan, result = row["context"], row["plan"], row["result"] or {}
 
@@ -890,22 +929,28 @@ def apply(store: Store, rules: Rules, rid: str, send_email: bool) -> dict:
             retries=1)["data"]
         done.append(task["id"]["task_id"])
         save()
-
-    if send_email:
-        if result.get("email") == "sending":
-            raise ApiError("the email state is unknown after an error. Check the Sent folder. "
-                           "I will not send it again; press CRM only to close the card.")
-        if not result.get("email"):
-            result["email"] = "sending"
-            save()
-            result["email"] = gmail_send(plan["email"])
-            save()
+    result["crm"] = "applied"
+    save()
     return result
 
 
-def done_text(ctx: dict, plan: dict, result: dict, sent: bool) -> str:
-    parts = [f"✅ <b>{escape(ctx['meeting']['title'])}</b>"]
-    deal_url = result.get("deal_url") or next((d["web_url"] for d in ctx["deals"] if d["id"] == plan["deal_id"]), None)
+def send_email(store: Store, rid: str) -> dict:
+    """Send the recap. The state is saved before the Gmail call, so a crash cannot send it twice."""
+    row = store.get(rid)
+    result = row["result"] or {}
+    if result.get("email") == "sending":
+        raise ApiError("the email state is unknown after an error. Check the Sent folder. "
+                       "I will not send it again. Tap Skip email to close this part.")
+    result["email"] = "sending"
+    store.update(rid, result=result)
+    result["email"] = gmail_send(row["plan"]["email"])
+    store.update(rid, result=result)
+    return result
+
+
+def crm_done_text(ctx: dict, plan: dict, result: dict) -> str:
+    parts = [f"✅ <b>{escape(ctx['meeting']['title'])}</b> · Attio updated"]
+    deal_url = result.get("deal_url") or next((d.get("web_url") for d in ctx["deals"] if d["id"] == plan["deal_id"]), None)
     if result.get("deal_id"):
         parts.append(f'• New deal: <a href="{escape(deal_url or "")}">{escape(plan["new_deal_name"])}</a>')
     elif deal_url:
@@ -914,8 +959,6 @@ def done_text(ctx: dict, plan: dict, result: dict, sent: bool) -> str:
         parts.append(f'• Company: <a href="{escape(ctx["company"]["web_url"])}">{escape(ctx["company"]["name"])}</a>')
     parts.append(f"• {len(plan['changes'])} field changes, "
                  f"{sum(1 for k in result if k.startswith('note_'))} notes, {len(result.get('tasks', []))} tasks")
-    if sent:
-        parts.append(f"• Email sent to {escape(', '.join(plan['email']['to']))}")
     return "\n".join(parts)
 
 
@@ -923,37 +966,44 @@ def handle_button(store: Store, rules: Rules, cq: dict) -> None:
     act, rid, version = ((cq.get("data") or "") + "::").split(":")[:3]
     row = store.get(rid)
     message_id = (cq.get("message") or {}).get("message_id")
-    if not row or row["status"] != "drafted" or str(row["version"]) != version:
-        tg_send("This card is old or closed.")
+    if act not in ACTIONS or not row or row["status"] != "drafted" or str(row["version"]) != version:
+        tg_send("This button is old or the card is closed. /pending sends the open cards again.")
         return
-    title = row["context"]["meeting"]["title"]
-    if act == "k":
-        store.update(rid, status="skipped")
-        clear_buttons(message_id)
-        tg_send(f"⏭ Skipped: {escape(title)}")
+    part, result = ACTIONS[act], row["result"] or {}
+    if not (crm_open(result) if part == "crm" else email_open(result)):
+        tg_send("This part is already done.")
         return
-    send = act == "s"
-    if send and not row["plan"]["email"]["to"]:
+    if act == "es" and not row["plan"]["email"]["to"]:
         tg_send("No recipient. Reply with one.")
         return
-    store.update(rid, status="working")
+    title = escape(row["context"]["meeting"]["title"])
     clear_buttons(message_id)
+    if act in ("cx", "ex"):
+        result[part] = "skipped"
+        store.update(rid, result=result, status=card_status(result))
+        tg_send(f"⏭ {title}: {'CRM' if part == 'crm' else 'email'} skipped.")
+        return
+    store.update(rid, status="working")
     try:
-        result = apply(store, rules, rid, send_email=send)
+        result = apply_crm(store, rules, rid) if act == "ca" else send_email(store, rid)
     except Exception as e:
         store.update(rid, status="drafted", error=str(e)[:1000])
-        tg_send(f"⚠️ {escape(title)}: {escape(str(e)[:800])}\nPress again to finish the remaining steps.",
-                buttons(rid, row["version"], bool(row["plan"]["email"]["to"])))
+        tg_send(f"⚠️ {title}: {escape(str(e)[:800])}\nTap again to finish the remaining steps.",
+                buttons(rid, row["version"], part, bool(row["plan"]["email"]["to"])))
         return
-    store.update(rid, status="done", error=None)
-    tg_send(done_text(row["context"], row["plan"], result, send))
+    store.update(rid, status=card_status(result), error=None)
+    if act == "ca":
+        tg_send(crm_done_text(row["context"], row["plan"], result))
+    else:
+        tg_send(f"✉️ <b>{title}</b> · sent to {escape(', '.join(row['plan']['email']['to']))}")
 
 
-HELP = ("After each recorded call I send a card: CRM changes, next steps, a minutes note and a recap email.\n"
-        "• Reply to the card with text or a voice note to change the draft.\n"
+HELP = ("After each recorded call I send a card in two parts, each with its own buttons.\n"
+        "• CRM part: field changes, next steps as Attio tasks, a minutes note. ✅ Apply to Attio or ⏭ Skip CRM.\n"
+        "• Email part: the recap email. ✉️ Send or ⏭ Skip email.\n"
+        "• Reply to a part with text or a voice note to change the draft.\n"
         "• A message that is not a reply goes to the newest open card.\n"
-        "• ✅ Send + apply writes Attio and sends the email. 🗂 CRM only writes Attio. ⏭ Skip closes the card.\n"
-        "• /pending lists open cards.")
+        "• /pending sends the open cards again.")
 
 
 def handle_update(store: Store, rules: Rules, update: dict) -> None:
@@ -968,8 +1018,11 @@ def handle_update(store: Store, rules: Rules, update: dict) -> None:
     text = (msg.get("text") or "").strip()
     if text.startswith("/pending"):
         rows = store.open_calls()
-        tg_send("\n".join(f"• {escape(r['context']['meeting']['title'])} · {r['context']['meeting']['date']} · v{r['version']}"
-                          for r in rows) or "No open cards.")
+        if not rows:
+            tg_send("No open cards.")
+        for r in reversed(rows):  # oldest first, so the newest card is at the bottom
+            clear_card_buttons(r)
+            send_card(store, r["recording_id"])
         return
     if text.startswith("/"):
         tg_send(escape(HELP))
@@ -1114,7 +1167,7 @@ def setup(public_url: str) -> None:
     tg("setMyDescription", description="Turns recorded Attio calls into CRM updates, next steps and a recap "
                                        "email. You approve every write and every email. Private bot.")
     tg("setMyShortDescription", short_description="Attio call recap: CRM update, next steps, email.")
-    tg("setMyCommands", commands=[{"command": "pending", "description": "Open cards"},
+    tg("setMyCommands", commands=[{"command": "pending", "description": "Send the open cards again"},
                                   {"command": "help", "description": "How to use the bot"}])
     target = f"{base}/attio"
     hooks = attio("GET", "/webhooks")["data"]
