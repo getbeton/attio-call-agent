@@ -133,10 +133,11 @@ You need an Attio workspace with call recording, a Telegram account, an xAI API 
    If the OAuth consent screen is in *Testing* mode, Google expires the token after 7 days. Use an *Internal* app or publish the app.
 4. **Deploy on Railway.**
    1. Fork this repo.
-   2. Create a Railway project from the fork. Railway finds the `Dockerfile` and `railway.json`.
+   2. Create a Railway project from the fork. Railway finds the `Dockerfile`.
    3. Add a volume at `/data`.
    4. Set the env vars from [`.env.example`](.env.example).
    5. Generate a public domain.
+   6. Optional: in the service settings, set the healthcheck path to `/health`. Keep one replica.
 5. **Connect the webhooks.** Run this with the same env vars:
    ```bash
    python agent.py setup https://your-service.up.railway.app
