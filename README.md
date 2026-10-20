@@ -1,46 +1,48 @@
 # Attio Call Agent
 
-**Your sales call ends. A few minutes later, Telegram shows the CRM update, the next steps and the recap email. Ask the agent about the call, correct it by text or voice, and approve each part with one tap. Between calls, the same bot answers questions about your CRM.**
+**After a sales call, this agent sends you a Telegram card with the CRM changes, the next steps and a recap email. You ask questions or give changes in text or voice. You apply each part with one button. Between calls, the same bot answers questions about your Attio CRM.**
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-black.svg)](LICENSE)
 ![Node 24](https://img.shields.io/badge/node-24-black.svg)
 ![Pi SDK](https://img.shields.io/badge/agent-Pi%20SDK-black.svg)
 ![Model: grok](https://img.shields.io/badge/model-grok--4.7-black.svg)
 
-Built by the team behind **[Sell to State](https://selltostate.com)**: structured government procurement data across 194 countries, with tenders, suppliers and agencies in one entity graph.
+Made by the team of **[Sell to State](https://selltostate.com)**: government procurement data for 194 countries, with tenders, suppliers and agencies in one entity graph.
 
 ---
 
-## Why we built it
+## Why we made it
 
-We sell data to companies that sell to governments, so most of our pipeline moves on calls. Attio records those calls and makes the transcripts. After each call, three small jobs remain:
+Our company sells data to companies that sell to governments. Most of our deals move forward on calls. Attio records these calls and makes the transcripts. After each call, three small tasks stay:
 
-1. Update the deal: stage, value, what the buyer needs, what they use now.
-2. Write down the next steps, with dates.
-3. Send the other side a recap of what we agreed.
+1. Update the deal: the stage, the value, what the buyer needs, and what the buyer uses now.
+2. Write the next steps, with dates.
+3. Send the other side a recap of the agreements.
 
-Each job takes a few minutes, so the jobs slip. The transcript has all the data. This agent turns the transcript into structured changes and a recap email, and **a person approves each write and each send**.
+Each task takes a few minutes, so people often do not do them. The transcript has all the data. This agent changes the transcript into CRM changes and a recap email. You decide on each write and each email with a button.
 
-Version 1 was a fixed Python pipeline: one draft, then redrafts. Version 2 is an agent with a saved session for each call, so you can also *talk* to it: ask what the buyer said about price, ask for a task next Friday, or ask which deals are stuck. The Python version is in the tag [`v1-python`](../../tree/v1-python).
+Version 1 was a Python script with a fixed sequence: one draft, then new drafts. Version 2 is an agent. It keeps one saved session for each call, so you can talk to it. For example, you can ask what the buyer said about the price, or ask for a task for next Friday. The tag [`v1-python`](../../tree/v1-python) has the Python version.
 
 ## What it does
 
 ### Cards
-- An Attio `call-recording.created` webhook starts each run. A timer re-checks recent recordings in case a webhook was lost.
-- Code checks the meeting first: you attended, someone from outside your company attended, and the transcript is not empty.
-- The agent reads the transcript, the company, its deals, people, recent notes and your Attio schema (fields, options, deal stages). It drafts:
-  - field changes, each with a quote from the call as evidence
-  - a new deal when the call shows an opportunity and the company has no deal
+
+- An Attio webhook (`call-recording.created`) starts each run. A timer checks the recent recordings again, in case a webhook did not arrive.
+- Code checks the meeting before the agent starts. You must be in the meeting, a person from outside your company must be in the meeting, and the transcript must have text.
+- The agent reads the transcript, the company, its deals, the people, the recent notes and your Attio schema (fields, options and deal stages). Then it makes a draft with:
+  - field changes, each with a quote from the call as proof
+  - a new deal, if the call shows a sales opportunity and the company has no deal
   - next steps as Attio tasks with due dates
-  - an internal minutes note
+  - an internal note with the minutes
   - a recap email in the language of the call (English or Russian)
-- You get one card in two parts, and each part has its own buttons:
+- You get one card in two parts. Each part has its own buttons:
   - CRM part: ✅ Apply to Attio or ⏭ Skip CRM
   - Email part: ✉️ Send or ⏭ Skip email
-- Reply to the card with text or a voice note. Ask about the call ("what did Sam say about the budget?") or change the draft ("value 500, shorter email"). The agent answers or posts a new version of the open parts.
+- Reply to the card with text or a voice message. You can ask about the call ("what did Sam say about the budget?") or change the draft ("value 500, shorter email"). The agent answers, or it sends a new version of the open parts.
 
 ### Chat
-A message that is not a reply goes to one general CRM chat:
+
+A message that is not a reply goes to one general CRM chat. Examples:
 
 - "deals in Qualified"
 - "what did I agree with Dana?" (the agent finds the call and quotes the transcript)
@@ -49,7 +51,7 @@ A message that is not a reply goes to one general CRM chat:
 - "write to Dana that the sample is ready"
 - "make a card for my call with Dana"
 
-Every write comes as a proposal with ✅ Apply / ⏭ Skip.
+The agent sends each write as a proposal with ✅ Apply and ⏭ Skip.
 
 ```text
 📞 Acme <> Northwind · 2026-10-12 · v2
@@ -80,16 +82,16 @@ Agent: At 14:05: "We have budget for a pilot this quarter, not for the full set.
 ```mermaid
 sequenceDiagram
     participant A as Attio
-    participant S as Agent (Railway)
+    participant S as Agent service
     participant G as Grok via Pi
     participant T as You (Telegram)
     participant M as Gmail
     A->>S: call-recording.created (signed)
     S->>A: meeting, recording, company, deals, notes, schema
     S->>G: new card session: context + transcript
-    G->>S: propose_card (validated in code)
+    G->>S: propose_card (code checks it)
     S->>T: card v1 (CRM part + email part)
-    T->>S: "what did they say about price?" (text or voice)
+    T->>S: "what did they say about the price?" (text or voice)
     G->>T: answer with quotes
     T->>S: "value 500, shorter email"
     G->>S: propose_card
@@ -100,127 +102,155 @@ sequenceDiagram
     S->>M: recap email
 ```
 
-- The agent runs on the [Pi SDK](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) with `grok-4.7`. All built-in coding tools are off. The agent has only the tools in `src/agent.ts`:
+- The agent uses the [Pi SDK](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) with `grok-4.7`. All built-in tools of Pi (files and shell) are off. The agent has only the tools in `src/agent.ts`:
   - read tools: `search_crm`, `get_record`, `list_deals`, `list_notes`, `list_calls`, `get_call_context`, `get_transcript`
   - proposal tools: `propose_card`, `propose_task`, `propose_note`, `propose_field_update`, `propose_deal`, `propose_email`, `start_card`
-- Each call has a saved session (JSONL on the volume). The general chat has one more. A restart loses nothing: the next message reopens the session.
-- Messages for one session run in order. While the agent works, a status message shows the current step, for example "reading the transcript…".
-- State is in SQLite (`node:sqlite`). The only dependencies are the Pi SDK and TypeBox. Node runs the TypeScript directly; there is no build step.
+- Each call has a saved session, as a JSONL file on the disk. The general chat has one more session. After a restart, the next message opens the session again, with the full history.
+- The messages for one session run one after the other. While the agent works, a status message shows the current step, for example "reading the transcript…".
+- The state is in SQLite (`node:sqlite`). The service has two dependencies: the Pi SDK and TypeBox. Node runs the TypeScript files directly, without a build step.
 
 ## Safety
 
-The model reads and proposes. Code decides what is written and sent.
+The model reads data and makes proposals. Code decides what to write and what to send.
 
-- The model has no tool that writes to Attio or sends email. Proposal tools validate the input and show it with buttons. Only the button handler writes.
-- The agent validates every proposal against the live Attio schema and the real records. It drops unknown fields, unknown options, unknown deal IDs and bad numbers or dates, and it shows a warning.
-- A card email goes only to meeting participants and to addresses that you type. Any other email goes only to people in Attio or to addresses that you type. A transcript cannot add a recipient.
-- Transcripts, notes and CRM text are data. The prompts tell the model to ignore instructions inside them.
-- The agent checks the Attio HMAC signature and the Telegram secret token. It accepts Telegram messages from your user ID only.
-- If the model says that it made a proposal but no proposal tool ran, the bot warns you.
-- Each card button is tied to one card version and one part. The agent saves the email state before it calls Gmail, so a crash cannot send twice.
-- The Gmail token has the `gmail.send` scope only.
+- The model has no tool that writes to Attio or sends email. A proposal tool checks the input and shows it with buttons. Only the button handler writes.
+- The agent checks each proposal against the live Attio schema and the real records. It removes unknown fields, unknown options, unknown deal IDs, and incorrect numbers or dates. Then it shows a warning.
+- A card email goes only to the meeting participants and to addresses that you type. Other email goes only to people in Attio and to addresses that you type. A transcript cannot add a recipient.
+- Transcripts, notes and CRM text are data. The prompts tell the model not to follow instructions in this data.
+- The agent checks the Attio HMAC signature and the Telegram secret token. It accepts Telegram messages only from your user ID.
+- If the model tells you about a proposal, but no proposal tool ran, the bot shows a warning.
+- Each card button is for one card version and one part. The agent saves the email state before it calls Gmail. Thus, after a crash, it does not send the email two times.
+- The Gmail token has only the `gmail.send` scope.
 
 ## Who gets the card email
 
-| On the call | From | To | CC |
+| Participants of the call | From | To | CC |
 |---|---|---|---|
 | You + a prospect | `DEFAULT_SENDER` | the prospect | your colleagues |
-| You + a partner | the partner's sender from `PARTNERS` | the partner | your colleagues |
-| You + a partner + a prospect | the partner's sender | the prospect | the partner and your colleagues |
+| You + a partner | the sender of that partner in `PARTNERS` | the partner | your colleagues |
+| You + a partner + a prospect | the sender of that partner | the prospect | the partner and your colleagues |
 
-"Colleagues" are participants at `INTERNAL_DOMAINS`. A partner is a domain in `PARTNERS`. All other domains are prospects.
+Your colleagues are the participants with an address in `INTERNAL_DOMAINS`. A partner is a domain in `PARTNERS`. All other domains are prospects.
 
 ## Setup
 
-You need an Attio workspace with call recording, a Telegram account, an xAI API key and a Google Workspace or Gmail account.
+You need:
+
+- an Attio workspace with call recording
+- a Telegram account
+- an xAI API key
+- a Google Workspace or Gmail account
+- a host that runs a Docker container (or Node.js 24 or later), with a public HTTPS URL and a persistent disk
 
 ### 1. Telegram
 
-Create a bot with [@BotFather](https://t.me/BotFather). Get your numeric user ID, for example from [@userinfobot](https://t.me/userinfobot).
+Make a bot with [@BotFather](https://t.me/BotFather). Get your numeric user ID, for example from [@userinfobot](https://t.me/userinfobot).
 
 ### 2. Attio
 
-Go to Workspace settings → Developers and create an access token with these scopes: `record_permission:read-write`, `object_configuration:read`, `meeting:read`, `call_recording:read`, `note:read-write`, `task:read-write`, `user_management:read`, `webhook:read-write`.
+Go to Workspace settings → Developers. Make an access token with these scopes: `record_permission:read-write`, `object_configuration:read`, `meeting:read`, `call_recording:read`, `note:read-write`, `task:read-write`, `user_management:read`, `webhook:read-write`.
 
 ### 3. Gmail
 
-In Google Cloud, create an OAuth client of type *Desktop app*. Then, on your laptop, run:
+1. In Google Cloud, make an OAuth client of the type *Desktop app*.
+2. On your computer, run:
+   ```bash
+   npm ci
+   GOOGLE_CLIENT_ID=... GOOGLE_CLIENT_SECRET=... node src/main.ts gmail-auth
+   ```
+3. Open the URL and allow access.
+4. Copy the `refresh_token` value.
+
+To send from an alias, add the alias in Gmail → Settings → Accounts → *Send mail as*.
+
+If the OAuth consent screen is in *Testing* mode, Google stops the token after 7 days. Use an *Internal* app, or publish the app.
+
+### 4. Service
+
+Copy [`.env.example`](.env.example) to `.env` and set the values.
+
+With Docker:
 
 ```bash
-npm ci
-GOOGLE_CLIENT_ID=... GOOGLE_CLIENT_SECRET=... node src/main.ts gmail-auth
+docker build -t attio-call-agent .
+docker run -d --restart unless-stopped -p 8080:8080 -v attio-call-agent:/data --env-file .env attio-call-agent
 ```
 
-Open the URL, allow access, and copy `refresh_token`. To send from an alias, add it in Gmail → Settings → Accounts → *Send mail as*. If the OAuth consent screen is in *Testing* mode, Google expires the token after 7 days. Use an *Internal* app or publish the app.
+Without Docker (Node.js 24 or later):
 
-### 4. Railway
+```bash
+npm ci --omit=dev
+node --env-file=.env src/main.ts serve
+```
 
-1. Fork this repo.
-2. Create a Railway project from the fork. Railway finds the `Dockerfile`.
-3. Add a volume at `/data`.
-4. Set the env vars from [`.env.example`](.env.example).
-5. Generate a public domain.
-6. Optional: in the service settings, set the healthcheck path to `/health`. Keep one replica.
+Then:
+
+- Give the service a public HTTPS URL. The service listens on `PORT` (default 8080).
+- Set `DATA_DIR` to a folder on a persistent disk. The folder keeps the SQLite file and the sessions.
+- Run only one instance.
+- Optional: use `GET /health` as the health check. It shows the value of `COMMIT_SHA`.
 
 ### 5. Webhooks
 
-Run this with the same env vars:
+Run this command with the same env vars:
 
 ```bash
-node src/main.ts setup https://your-service.up.railway.app
+docker run --rm --env-file .env attio-call-agent node src/main.ts setup https://your-host.example.com
 ```
 
-This command sets the Telegram webhook, the bot profile and the commands, then creates the Attio webhook. It prints `attio_webhook_secret` one time. Put it into `ATTIO_WEBHOOK_SECRET` on Railway.
+The command sets the Telegram webhook, the bot profile and the bot commands. Then it makes the Attio webhook and shows `attio_webhook_secret` one time. Put this value into `ATTIO_WEBHOOK_SECRET`, then start the service again.
 
 ### 6. A test without writes
 
-With `DRY_RUN=1`, the agent prints Telegram messages to stdout and refuses Attio writes and email:
+With `DRY_RUN=1`, the agent shows the Telegram messages in the terminal. It does not write to Attio and it does not send email.
 
 ```bash
 DRY_RUN=1 DATA_DIR=./data-dry TELEGRAM_OWNER_ID=1 TELEGRAM_BOT_TOKEN=x node src/main.ts card <meeting_id> <recording_id>
-DRY_RUN=1 DATA_DIR=./data-dry TELEGRAM_OWNER_ID=1 TELEGRAM_BOT_TOKEN=x node src/main.ts reply <recording_id> "what did they say about price?"
+DRY_RUN=1 DATA_DIR=./data-dry TELEGRAM_OWNER_ID=1 TELEGRAM_BOT_TOKEN=x node src/main.ts reply <recording_id> "what did they say about the price?"
 DRY_RUN=1 DATA_DIR=./data-dry TELEGRAM_OWNER_ID=1 TELEGRAM_BOT_TOKEN=x node src/main.ts say "deals in Qualified"
 ```
 
 ## Configuration
 
-| Variable | Required | Meaning |
+| Variable | Required | Function |
 |---|---|---|
-| `ATTIO_API_KEY` | yes | Attio access token |
-| `ATTIO_WEBHOOK_SECRET` | yes | Printed by `setup` |
-| `XAI_API_KEY` | yes | xAI key, for the agent and for speech to text |
-| `XAI_MODEL` | | Model for the cards. Default `grok-4.7` |
-| `CHAT_MODEL` | | Model for the general chat. Default: `XAI_MODEL`. See "Speed and cost" |
-| `DRAFT_EFFORT` | | Reasoning effort for the first draft: `off` (API default), `low`, `medium`, `high`. Default `high` |
-| `CHAT_EFFORT` | | Reasoning effort for replies and chat. Default `low` |
-| `TELEGRAM_BOT_TOKEN` | yes | From BotFather |
-| `TELEGRAM_WEBHOOK_SECRET` | yes | Any random string |
+| `ATTIO_API_KEY` | yes | The Attio access token |
+| `ATTIO_WEBHOOK_SECRET` | yes | The value that `setup` shows |
+| `XAI_API_KEY` | yes | The xAI key, for the agent and for speech to text |
+| `XAI_MODEL` | | The model for the cards. Default: `grok-4.7` |
+| `CHAT_MODEL` | | The model for the general chat. Default: the value of `XAI_MODEL`. See "Speed and cost" |
+| `DRAFT_EFFORT` | | The reasoning effort for the first draft: `off` (API default), `low`, `medium` or `high`. Default: `high` |
+| `CHAT_EFFORT` | | The reasoning effort for replies and the chat. Default: `low` |
+| `TELEGRAM_BOT_TOKEN` | yes | The token from BotFather |
+| `TELEGRAM_WEBHOOK_SECRET` | yes | A random text |
 | `TELEGRAM_OWNER_ID` | yes | Your numeric Telegram user ID |
-| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | yes | OAuth client (Desktop app) |
-| `GMAIL_REFRESH_TOKEN` | yes | From `gmail-auth` |
-| `OWNER_EMAILS` | yes | Your addresses, comma-separated. Cards are made only for meetings with one of them |
-| `OWNER_NAME` | | Sign-off name and task prefix, for example `Alex` |
-| `OWNER_TIMEZONE` | | IANA time zone for "Friday" and "tomorrow", for example `Europe/Berlin`. Default `UTC` |
-| `SENDER_NAME` | | Display name in the From header |
-| `INTERNAL_DOMAINS` | | Your company domains (CC) |
-| `DEFAULT_SENDER` | | The From address for prospect calls and other email |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | yes | The OAuth client (Desktop app) |
+| `GMAIL_REFRESH_TOKEN` | yes | The token from `gmail-auth` |
+| `OWNER_EMAILS` | yes | Your addresses, with commas between them. The agent makes cards only for meetings with one of these addresses |
+| `OWNER_NAME` | | The name for the email signature and the tasks, for example `Alex` |
+| `OWNER_TIMEZONE` | | The IANA time zone for words such as "Friday" and "tomorrow", for example `Europe/Berlin`. Default: `UTC` |
+| `SENDER_NAME` | | The display name in the From field |
+| `INTERNAL_DOMAINS` | | The domains of your company (CC) |
+| `DEFAULT_SENDER` | | The From address for prospect calls and for other email |
 | `PARTNERS` | | `partner.com=sender@you.com,...` |
-| `DATA_DIR` | | SQLite and sessions. `/data` in Docker |
-| `LOOKBACK_DAYS` | | How far back the timer looks. Default `3` |
-| `RECONCILE_HOURS` | | Timer interval. Default `6` |
-| `BOT_NAME` | | Bot display name that `setup` sets |
+| `DATA_DIR` | | The folder for SQLite and the sessions. Default: `data` (`/data` in the Docker image) |
+| `PORT` | | The HTTP port. Default: `8080` |
+| `LOOKBACK_DAYS` | | The number of days that the timer checks. Default: `3` |
+| `RECONCILE_HOURS` | | The time between two timer checks, in hours. Default: `6` |
+| `BOT_NAME` | | The display name of the bot that `setup` sets |
+| `COMMIT_SHA` | | Optional. `/health` shows it |
 
 ## Telegram commands
 
-- `/pending` sends the open cards again, with fresh buttons.
-- `/calls` lists the cards of the last 7 days and their state.
-- `/cost` shows the xAI spend for 24 hours, 7 days and 30 days.
-- `/new` starts a new general chat. The old one stays on disk.
-- `/help` shows the usage.
+- `/pending` sends the open cards again, with new buttons.
+- `/calls` shows the cards of the last 7 days and their status.
+- `/cost` shows the xAI cost for 24 hours, 7 days and 30 days.
+- `/new` starts a new general chat. The old chat stays on the disk.
+- `/help` shows how to use the bot.
 
 ## Speed and cost
 
-These are measured costs and times. The card is from a 30-minute call: a 29k-character transcript.
+We measured these values. The card is from a 30-minute call with a transcript of 29,000 characters.
 
 | Step | Setting | Time | xAI cost |
 |---|---|---|---|
@@ -228,23 +258,23 @@ These are measured costs and times. The card is from a 30-minute call: a 29k-cha
 | Question about the call | `grok-4.7`, `low` | 54 s | $0.03-0.06 |
 | Change to the card | `grok-4.7`, `low` | 1 min | $0.05 |
 | "deals in Qualified" | `grok-4.7`, `low` | 25 s | $0.01 |
-| "what did I agree with Dana?" (finds and reads the call) | `grok-4.7`, `low` | 1 min | $0.04 |
+| "what did I agree with Dana?" (the agent finds and reads the call) | `grok-4.7`, `low` | 1 min | $0.04 |
 | "add a task to call Dana on Friday" | `grok-4.7`, `low` | 1.5-2 min | $0.02 |
 
-Most of the time is model latency: each `grok-4.7` request takes 10-20 s, and a request with tools needs 2-6 requests. We tried faster chat models on the same requests:
+Most of the time is the wait for the model. One `grok-4.7` request takes 10-20 s. A request that uses tools needs 2-6 model requests. We also tried faster models for the chat, with the same requests:
 
-- `grok-4.20-0309-non-reasoning` took 12 s, but it said that it had made a task proposal when it had not. The bot now warns about such claims.
-- `grok-4.3` at `low` listed 8 of 9 deals, and it ignored a request for quotes.
+- `grok-4.20-0309-non-reasoning` took 12 s. But it said that it made a task proposal, and it did not make one. The bot now shows a warning in this case.
+- `grok-4.3` at `low` effort showed 8 of 9 deals. It gave no quotes when we asked for quotes.
 
-So the default stays `grok-4.7` for everything. `CHAT_MODEL` lets you choose a different trade.
+Thus the default model is `grok-4.7` for all sessions. Use `CHAT_MODEL` to select a different model for the chat.
 
 ## Limits
 
-- One owner for each deployment.
-- Single-value CRM fields only. The agent skips multi-select fields.
-- Recap emails in English and Russian. Other languages get an English email.
-- SQLite and session files on a volume: run one replica only.
-- The docker image is about 390 MB, because the Pi SDK includes clients for many model providers.
+- One owner for each installation.
+- Only CRM fields with one value. The agent does not change multi-select fields.
+- Recap emails in English and Russian. A call in a different language gets an English email.
+- Run only one instance. SQLite and the session files are on one disk.
+- The Docker image is approximately 390 MB, because the Pi SDK contains clients for many model providers.
 
 ## Development
 
@@ -253,7 +283,7 @@ npm ci
 npm test
 ```
 
-The tests cover routing, the validation of model output, the transcript format, the card and its buttons, the message split and the store. They need no network and no keys.
+The tests check the rules for the sender and the recipients, the checks of the model output, the transcript format, the card and its buttons, the message split and the store. They do not need a network or keys.
 
 ## License
 
