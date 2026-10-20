@@ -100,7 +100,8 @@ async function actionButton(act: string, id: number, messageId?: number) {
 			done = `note added to ${tg.esc(p.label)}`;
 		} else if (a.kind === "fields") {
 			const rec = await attio.updateRecord(p.object, p.record_id, Object.fromEntries(p.changes.map((c: any) => [c.attribute, attio.toAttio(c.type, c.new)])));
-			done = `<a href="${tg.esc(rec.web_url)}">${tg.esc(p.label)}</a> updated`;
+			const what = p.changes.map((c: any) => `${tg.esc(c.title)} ${tg.esc(c.old ?? "—")} → ${tg.esc(c.new)}`).join(", ");
+			done = `<a href="${tg.esc(rec.web_url)}">${tg.esc(p.label)}</a>: ${what}`;
 		} else if (a.kind === "deal") {
 			const rec = await attio.createDeal({
 				name: p.name, stage: p.stage, ...(p.value !== null ? { value: [{ currency_value: p.value }] } : {}),
