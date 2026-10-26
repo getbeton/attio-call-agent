@@ -3,7 +3,8 @@ import { ApiError, DRY_RUN, env, http } from "./net.ts";
 
 let token = { value: "", exp: 0 };
 
-async function accessToken(): Promise<string> {
+// Call it before you mark an email "sending": a dead refresh token fails here, before Gmail gets anything.
+export async function accessToken(): Promise<string> {
 	if (Date.now() > token.exp - 60_000) {
 		const body = new URLSearchParams({ client_id: env("GOOGLE_CLIENT_ID"), client_secret: env("GOOGLE_CLIENT_SECRET"), refresh_token: env("GMAIL_REFRESH_TOKEN"), grant_type: "refresh_token" });
 		const res = await http("POST", "https://oauth2.googleapis.com/token", { body, headers: { "Content-Type": "application/x-www-form-urlencoded" } });

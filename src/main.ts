@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { ask, CHAT_EFFORT, clearCardButtons, initAgent, newChat, sendCard, startCard } from "./agent.ts";
 import * as attio from "./attio.ts";
-import { sendEmail } from "./gmail.ts";
+import { accessToken, sendEmail } from "./gmail.ts";
 import { env, http } from "./net.ts";
 import { cardStatus, crmOpen, emailOpen, type Rules, rulesFromEnv, shouldProcess } from "./plan.ts";
 import { Store } from "./store.ts";
@@ -60,6 +60,7 @@ async function cardButton(act: string, rid: string, version: string, messageId?:
 		if (act === "ca") await attio.applyCard(row.context, row.plan, result, save, rules);
 		else {
 			if (result.email === "sending") throw new Error("the email state is unknown after an error. Check the Sent folder. I will not send it again. Tap Skip email to close this part.");
+			await accessToken();
 			result.email = "sending";
 			save();
 			result.email = await sendEmail(row.plan.email);
@@ -109,6 +110,7 @@ async function actionButton(act: string, id: number, messageId?: number) {
 			}, rules);
 			done = `<a href="${tg.esc(rec.web_url)}">deal created</a>`;
 		} else {
+			await accessToken();
 			store.updateAction(id, { result: { email: "sending" } });
 			try {
 				await sendEmail(p);
