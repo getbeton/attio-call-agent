@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-black.svg)](LICENSE)
 ![Node 24](https://img.shields.io/badge/node-24-black.svg)
 ![Pi SDK](https://img.shields.io/badge/agent-Pi%20SDK-black.svg)
-![Model: grok](https://img.shields.io/badge/model-grok--4.7-black.svg)
+![Model: Claude](https://img.shields.io/badge/model-claude--opus--5.5-black.svg)
 
 Made by the team of **[Sell to State](https://selltostate.com)**: government procurement data for 194 countries, with tenders, suppliers and agencies in one entity graph.
 
@@ -83,7 +83,7 @@ Agent: At 14:05: "We have budget for a pilot this quarter, not for the full set.
 sequenceDiagram
     participant A as Attio
     participant S as Agent service
-    participant G as Grok via Pi
+    participant G as Claude via Pi
     participant T as You (Telegram)
     participant M as Gmail
     A->>S: call-recording.created (signed)
@@ -102,12 +102,12 @@ sequenceDiagram
     S->>M: recap email
 ```
 
-- The agent uses the [Pi SDK](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) with `grok-4.7`. All built-in tools of Pi (files and shell) are off. The agent has only the tools in `src/agent.ts`:
+- The agent uses the [Pi SDK](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) with `claude-opus-5-5`. The Pi extension [pi-claude-agent-sdk](https://www.npmjs.com/package/pi-claude-agent-sdk) (provider `claude-bridge`) runs each model turn in Claude Code through the Claude Agent SDK, on your Claude subscription. The Docker image has the Claude Code binary from the Agent SDK package. All built-in tools of Pi (files and shell) are off. The agent has only the tools in `src/agent.ts`:
   - read tools: `search_crm`, `get_record`, `list_deals`, `list_notes`, `list_calls`, `get_call_context`, `get_transcript`
   - proposal tools: `propose_card`, `propose_task`, `propose_note`, `propose_field_update`, `propose_deal`, `propose_email`, `start_card`
 - Each call has a saved session, as a JSONL file on the disk. The general chat has one more session. After a restart, the next message opens the session again, with the full history.
 - The messages for one session run one after the other. While the agent works, a status message shows the current step, for example "reading the transcript…".
-- The state is in SQLite (`node:sqlite`). The service has two dependencies: the Pi SDK and TypeBox. Node runs the TypeScript files directly, without a build step.
+- The state is in SQLite (`node:sqlite`). The service has four dependencies: the Pi SDK, pi-ai (the in-memory credential store), pi-claude-agent-sdk and TypeBox. Node runs the TypeScript files directly, without a build step.
 
 ## Safety
 
@@ -138,7 +138,8 @@ You need:
 
 - an Attio workspace with call recording
 - a Telegram account
-- an xAI API key
+- a Claude Pro or Max subscription: run `claude setup-token` and put the token in `CLAUDE_CODE_OAUTH_TOKEN`
+- optional: an xAI API key for voice notes
 - a Google Workspace or Gmail account
 - a host that runs a Docker container (or Node.js 24 or later), with a public HTTPS URL and a persistent disk
 
@@ -216,9 +217,11 @@ DRY_RUN=1 DATA_DIR=./data-dry TELEGRAM_OWNER_ID=1 TELEGRAM_BOT_TOKEN=x node src/
 |---|---|---|
 | `ATTIO_API_KEY` | yes | The Attio access token |
 | `ATTIO_WEBHOOK_SECRET` | yes | The value that `setup` shows |
-| `XAI_API_KEY` | yes | The xAI key, for the agent and for speech to text |
-| `XAI_MODEL` | | The model for the cards. Default: `grok-4.7` |
-| `CHAT_MODEL` | | The model for the general chat. Default: the value of `XAI_MODEL`. See "Speed and cost" |
+| `CLAUDE_CODE_OAUTH_TOKEN` | yes | The token from `claude setup-token`. It is valid for one year and does not refresh. The agent keeps it in memory. Without it, the agent reads a Pi login from `DATA_DIR/pi/auth.json` |
+| `CLAUDE_MODEL` | | The model for the cards. Default: `claude-opus-5-5` |
+| `CHAT_MODEL` | | The model for the general chat. Default: the value of `CLAUDE_MODEL` |
+| `XAI_API_KEY` | | The xAI key for voice notes (speech to text). Without it, a voice note gets an error message |
+| `CLAUDE_CONFIG_DIR` | | The Claude Code state folder. The Docker image sets `/data/claude` |
 | `DRAFT_EFFORT` | | The reasoning effort for the first draft: `off` (API default), `low`, `medium` or `high`. Default: `high` |
 | `CHAT_EFFORT` | | The reasoning effort for replies and the chat. Default: `low` |
 | `TELEGRAM_BOT_TOKEN` | yes | The token from BotFather |
@@ -244,29 +247,22 @@ DRY_RUN=1 DATA_DIR=./data-dry TELEGRAM_OWNER_ID=1 TELEGRAM_BOT_TOKEN=x node src/
 
 - `/pending` sends the open cards again, with new buttons.
 - `/calls` shows the cards of the last 7 days and their status.
-- `/cost` shows the xAI cost for 24 hours, 7 days and 30 days.
+- `/cost` shows the model calls, output tokens and cards for 24 hours, 7 days and 30 days. The Claude subscription pays for the model; the $ value is only the xAI cost before the switch to Claude.
 - `/new` starts a new general chat. The old chat stays on the disk.
 - `/help` shows how to use the bot.
 
 ## Speed and cost
 
-We measured these values. The card is from a 30-minute call with a transcript of 29,000 characters.
+The Claude subscription pays for the model: there is no per-token bill. The turns use the same quota as your Claude Code sessions.
 
-| Step | Setting | Time | xAI cost |
+We measured these values on 2026-11-09. The card is from a 30-minute call with a transcript of 29,000 characters.
+
+| Step | Setting | Time with Claude | Time with `grok-4.7` before |
 |---|---|---|---|
-| First draft of a card | `grok-4.7`, `high` | 4.5 min | $0.14 |
-| Question about the call | `grok-4.7`, `low` | 54 s | $0.03-0.06 |
-| Change to the card | `grok-4.7`, `low` | 1 min | $0.05 |
-| "deals in Qualified" | `grok-4.7`, `low` | 25 s | $0.01 |
-| "what did I agree with Dana?" (the agent finds and reads the call) | `grok-4.7`, `low` | 1 min | $0.04 |
-| "add a task to call Dana on Friday" | `grok-4.7`, `low` | 1.5-2 min | $0.02 |
-
-Most of the time is the wait for the model. One `grok-4.7` request takes 10-20 s. A request that uses tools needs 2-6 model requests. We also tried faster models for the chat, with the same requests:
-
-- `grok-4.20-0309-non-reasoning` took 12 s. But it said that it made a task proposal, and it did not make one. The bot now shows a warning in this case.
-- `grok-4.3` at `low` effort showed 8 of 9 deals. It gave no quotes when we asked for quotes.
-
-Thus the default model is `grok-4.7` for all sessions. Use `CHAT_MODEL` to select a different model for the chat.
+| First draft of a card | `claude-opus-5-5`, `high` | 55 s | 4.5 min ($0.14) |
+| Change to the card (new process, saved session) | `claude-opus-5-5`, `low` | 26 s | 1 min ($0.05) |
+| "list my calls of the last 30 days" | `claude-opus-5-5`, `low` | 17 s | |
+| "which deals do we have" | `claude-opus-5-5`, `low` | 9 s | 25 s ($0.01) |
 
 ## Limits
 

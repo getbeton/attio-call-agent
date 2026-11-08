@@ -142,7 +142,7 @@ Chat
 
 /pending sends the open cards again
 /calls lists the cards of the last 7 days
-/cost shows the xAI spend
+/cost shows the model usage
 /new starts a new chat (the old one is saved)`;
 
 async function command(text: string) {
@@ -161,15 +161,16 @@ async function command(text: string) {
 		const day = 86_400_000;
 		const lines = [["24 h", 1], ["7 days", 7], ["30 days", 30]].map(([label, days]) => {
 			const c = store.costSince(new Date(Date.now() - (days as number) * day).toISOString());
-			return `• ${label}: $${c.cost.toFixed(2)} · ${c.calls} model calls · ${c.cards} cards`;
+			return `• ${label}: ${c.calls} model calls · ${Math.round(c.output / 1000)}k output tokens · ${c.cards} cards${c.cost ? ` · $${c.cost.toFixed(2)} xAI` : ""}`;
 		});
-		await tg.send(`<b>xAI spend</b>\n${lines.join("\n")}`);
+		await tg.send(`<b>Model usage</b> (the Claude subscription pays; $ is the xAI cost before the switch)\n${lines.join("\n")}`);
 	} else if (cmd === "/new") {
 		newChat();
 		await tg.send("New chat started. The earlier chat is saved.");
 	} else await tg.send(tg.esc(HELP));
 }
 
+// Voice notes still use xAI speech to text (XAI_API_KEY). The Claude subscription has no speech to text.
 async function transcribe(audio: Buffer, name: string): Promise<string> {
 	const form = new FormData();
 	form.append("model", process.env.XAI_STT_MODEL || "grok-voice-transcribe-2.0");
@@ -252,7 +253,7 @@ function verifyAttio(raw: Buffer, signature: string, secret: string): boolean {
 }
 
 async function serve() {
-	for (const name of ["ATTIO_API_KEY", "ATTIO_WEBHOOK_SECRET", "XAI_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_WEBHOOK_SECRET", "TELEGRAM_OWNER_ID", "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GMAIL_REFRESH_TOKEN"]) env(name);
+	for (const name of ["ATTIO_API_KEY", "ATTIO_WEBHOOK_SECRET", "TELEGRAM_BOT_TOKEN", "TELEGRAM_WEBHOOK_SECRET", "TELEGRAM_OWNER_ID", "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GMAIL_REFRESH_TOKEN"]) env(name);
 	await boot();
 	recoverAfterRestart();
 	await closeV1Cards().catch((e) => notify(`closing old cards: ${e.message}`));
@@ -312,7 +313,7 @@ async function setup(publicUrl: string) {
 	await tg.tg("setMyShortDescription", { short_description: "Attio call recaps and a CRM chat, with your approval." });
 	await tg.tg("setMyCommands", { commands: [
 		{ command: "pending", description: "Send the open cards again" }, { command: "calls", description: "Cards of the last 7 days" },
-		{ command: "cost", description: "xAI spend" }, { command: "new", description: "Start a new chat" }, { command: "help", description: "How to use the bot" },
+		{ command: "cost", description: "Model usage" }, { command: "new", description: "Start a new chat" }, { command: "help", description: "How to use the bot" },
 	] });
 	const target = `${base}/attio`;
 	const hooks = (await attio.attio("GET", "/webhooks")).data;

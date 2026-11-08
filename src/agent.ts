@@ -1,16 +1,19 @@
-// The agent: saved Pi sessions on grok, their tools, and the turn runner that reports progress in Telegram.
+// The agent: saved Pi sessions on Claude (Claude Code through the pi-claude-agent-sdk extension), their tools,
+// and the turn runner that reports progress in Telegram.
 //
 // Session keys: "chat" (one general CRM chat) and "card:<recording_id>" (one session per call).
 // The model reads freely, but it can only *propose* writes. Code validates each proposal and posts it
 // with buttons; the button handler in main.ts does the write.
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { join } from "node:path";
+import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
 import {
-	type AgentSession, createAgentSession, createExtensionRuntime, defineTool, ModelRuntime, SessionManager, SettingsManager,
+	type AgentSession, createAgentSession, DefaultResourceLoader, defineTool, ModelRuntime, SessionManager, SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import * as attio from "./attio.ts";
-import { env, http } from "./net.ts";
+
 import { cleanText, coerce, crmOpen, emailOpen, EMAIL_RE, formatTranscript, isDate, makePlan, type Rules, same, senderFor, shouldProcess } from "./plan.ts";
 import type { Store } from "./store.ts";
 import * as tg from "./telegram.ts";
@@ -18,6 +21,7 @@ import * as tg from "./telegram.ts";
 export type Deps = { store: Store; rules: Rules; dataDir: string };
 let deps: Deps;
 let runtime: ModelRuntime;
+let extensions: any; // the claude-bridge extension, loaded once and shared by all sessions
 let model: any; // cards: draft and replies
 let chatModel: any; // the general chat; can be a faster model (CHAT_MODEL)
 
@@ -28,21 +32,34 @@ export const CHAT_EFFORT = () => (process.env.CHAT_EFFORT || "low") as any;
 
 export async function initAgent(d: Deps) {
 	deps = d;
-	mkdirSync(join(d.dataDir, "pi"), { recursive: true });
-	runtime = await ModelRuntime.create({ authPath: join(d.dataDir, "pi", "auth.json"), modelsPath: join(d.dataDir, "pi", "models.json") });
-	await runtime.setRuntimeApiKey("xai", env("XAI_API_KEY"));
-	model = runtime.getModel("xai", process.env.XAI_MODEL || "grok-4.7");
-	if (!model) throw new Error(`unknown xAI model ${process.env.XAI_MODEL}`);
-	chatModel = process.env.CHAT_MODEL ? (runtime.getModel("xai", process.env.CHAT_MODEL) ?? (await xaiModel(process.env.CHAT_MODEL))) : model;
-}
+	const agentDir = join(d.dataDir, "pi");
+	mkdirSync(agentDir, { recursive: true });
+	// CLAUDE_CODE_OAUTH_TOKEN comes from `claude setup-token` (valid one year, no refresh). It stays in memory.
+	// Without it, Pi reads data/pi/auth.json (a normal Pi login, which Pi refreshes).
+	const token = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+	const credentials = token ? new InMemoryCredentialStore() : undefined;
+	await credentials?.modify("anthropic", async () => ({ type: "oauth", access: token!, refresh: "", expires: Date.now() + 365 * 86_400_000 }));
+	runtime = await ModelRuntime.create({ credentials, authPath: join(agentDir, "auth.json"), modelsPath: join(agentDir, "models.json") });
+	if (!runtime.hasConfiguredAuth("anthropic")) throw new Error("no Claude credential: set CLAUDE_CODE_OAUTH_TOKEN (run `claude setup-token`)");
 
-/** A model that Pi's registry does not list (for example a non-reasoning grok): copy the base entry, use xAI's prices. */
-async function xaiModel(id: string) {
-	const p = await http("GET", `https://api.x.ai/v1/language-models/${id}`, { headers: { Authorization: `Bearer ${env("XAI_API_KEY")}` } });
-	const perMillion = (units: number) => units / 10_000; // xAI prices are in 1/10000 USD per 1M tokens
-	const { thinkingLevelMap, ...base } = model;
-	return { ...base, id, name: id, reasoning: !id.includes("non-reasoning"),
-		cost: { input: perMillion(p.prompt_text_token_price), output: perMillion(p.completion_text_token_price), cacheRead: perMillion(p.cached_prompt_text_token_price), cacheWrite: 0 } };
+	// The same provider as the owner's Pi: claude-bridge runs Claude Code on the Claude subscription.
+	const loader = new DefaultResourceLoader({
+		cwd: d.dataDir, agentDir, noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
+		additionalExtensionPaths: [createRequire(import.meta.url).resolve("pi-claude-agent-sdk/src/index.ts")],
+	});
+	await loader.reload();
+	extensions = loader.getExtensions();
+	if (extensions.errors.length) throw new Error(`claude-bridge: ${extensions.errors.map((e: any) => e.error).join("; ")}`);
+	for (const { name, config } of extensions.runtime.pendingProviderRegistrations) runtime.registerProvider(name, config);
+	extensions.runtime.pendingProviderRegistrations = [];
+
+	const pick = (id: string) => {
+		const m = runtime.getModel("claude-bridge", id);
+		if (!m) throw new Error(`unknown Claude model ${id}`);
+		return m;
+	};
+	model = pick(process.env.CLAUDE_MODEL || "claude-opus-5-5");
+	chatModel = process.env.CHAT_MODEL ? pick(process.env.CHAT_MODEL) : model;
 }
 
 /** "[Mon 19 Oct 2026, 20:05]" in the owner's time zone, so the model can resolve "Friday" and "tomorrow". */
@@ -58,7 +75,7 @@ const IDLE_MS = 30 * 60_000;
 function loader(kind: "card" | "chat") {
 	const system = kind === "card" ? prompt("card.md", "fields.md", "email.md") : prompt("chat.md", "email.md");
 	return {
-		getExtensions: () => ({ extensions: [], errors: [], runtime: createExtensionRuntime() }),
+		getExtensions: () => extensions,
 		getSkills: () => ({ skills: [], diagnostics: [] }),
 		getPrompts: () => ({ prompts: [], diagnostics: [] }),
 		getThemes: () => ({ themes: [], diagnostics: [] }),
@@ -90,6 +107,7 @@ async function openSession(key: string): Promise<AgentSession> {
 		sessionManager: file && existsSync(file) ? SessionManager.open(file, dir) : SessionManager.create(deps.dataDir, dir),
 		settingsManager: SettingsManager.inMemory({ compaction: { enabled: true }, retry: { enabled: true, maxRetries: 2 } }),
 	});
+	await session.bindExtensions({}); // session_start: claude-bridge reads the Anthropic credential here
 	if (kind === "chat") deps.store.setMeta("chat_session_file", session.sessionFile ?? "");
 	else deps.store.updateCard(rid, { session_file: session.sessionFile ?? null });
 	session.subscribe((ev: any) => {

@@ -91,9 +91,9 @@ export class Store {
 		this.db.prepare("insert into ledger values (?, ?, ?, ?, ?, ?)").run(now(), sessionKey, u.input, u.output, u.cacheRead, u.cost);
 	}
 
-	costSince(sinceIso: string): { cost: number; calls: number; cards: number } {
-		const row = this.db.prepare(`select coalesce(sum(cost), 0) as cost, count(*) as calls,
+	costSince(sinceIso: string): { cost: number; output: number; calls: number; cards: number } {
+		const row = this.db.prepare(`select coalesce(sum(cost), 0) as cost, coalesce(sum(output), 0) as output, count(*) as calls,
 			count(distinct case when session_key like 'card:%' then session_key end) as cards from ledger where at >= ?`).get(sinceIso) as any;
-		return { cost: row.cost, calls: row.calls, cards: row.cards };
+		return { cost: row.cost, output: row.output, calls: row.calls, cards: row.cards };
 	}
 }

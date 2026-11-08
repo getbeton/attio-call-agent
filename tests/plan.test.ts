@@ -145,7 +145,7 @@ test("store: cards, actions, message map, costs", () => {
 	store.addMessages("card:r1", [10, 11]);
 	assert.equal(store.sessionFor(11), "card:r1");
 	store.addCost("card:r1", { input: 10, output: 5, cacheRead: 0, cost: 0.25 });
-	assert.deepEqual(store.costSince("2000-01-01"), { cost: 0.25, calls: 1, cards: 1 });
+	assert.deepEqual(store.costSince("2000-01-01"), { cost: 0.25, output: 5, calls: 1, cards: 1 });
 });
 
 test("signature and redaction helpers", () => {
